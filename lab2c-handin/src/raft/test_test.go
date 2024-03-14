@@ -1140,12 +1140,10 @@ func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash
 
 		if disconnect {
 			cfg.disconnect(victim)
-			DPrintf("断开连接 %v", victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
 		if crash {
 			cfg.crash1(victim)
-			DPrintf("崩溃 %v", victim)
 			cfg.one(rand.Int(), servers-1, true)
 		}
 

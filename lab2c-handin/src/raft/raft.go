@@ -2,7 +2,6 @@ package raft
 
 //BUG找出为什么再接收到lowTerm后leader还会更新term继续发送append
 //可能原因 更新term前发送Append的时候，包发了很久才到达，这个时候会被reject，reject包又花了很久才回来，可能这个时候leader已经回归正常状态，不该在退回到follower
-//BUG: votedFor更新有问题，看0日志
 //
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -95,7 +94,6 @@ type AppendRpl struct {
 	Term          int
 	Success       bool
 	ConflictIndex int
-	ConflictTerm  int
 }
 
 type AppendArg struct {
@@ -108,9 +106,6 @@ type AppendArg struct {
 }
 
 func (rf *Raft) apply2StateMachine(CommitIdx int) {
-	if rf.log[CommitIdx].Term != rf.currentTerm {
-		return
-	}
 	rf.commitIndex = CommitIdx
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
 		alyMsg := ApplyMsg{
@@ -135,7 +130,7 @@ func (rf *Raft) LeaderHeartBeatProducer() {
 			rf.mu.Unlock()
 			break
 		}
-		DPrintf("Leader %v log %v Commit: %v Term: %v", rf.me, rf.log, rf.commitIndex, rf.currentTerm)
+		// DPrintf("Leader %v log %v Commit: %v Term: %v", rf.me, rf.log, rf.commitIndex, rf.currentTerm)
 		// DPrintf("Leader %v   Commit: %v", rf.me, rf.commitIndex)
 		rf.mu.Unlock()
 		rf.LeaderSendLog()
@@ -164,10 +159,9 @@ func (rf *Raft) AppendListener() {
 				rf.mu.Unlock()
 			} else {
 				lastAppendTime = time.Now()
-				//下面这行导致了小概率bug,更改了votedFor导致出现了脑裂进而导致同一个term和同一个index日志不同
-				// rf.mu.Lock()
-				// rf.RefreshTerm(msg.Term)
-				// rf.mu.Unlock()
+				rf.mu.Lock()
+				rf.RefreshTerm(msg.Term)
+				rf.mu.Unlock()
 			}
 
 		case electionTimeout := <-rf.tickerChan: // check election timeout
@@ -180,6 +174,8 @@ func (rf *Raft) AppendListener() {
 				isElecting = false
 			}
 			rf.mu.Lock()
+			rf.votedFor = -1
+			rf.persist()
 
 			//如果已经选举为leader
 			if rf.currentStatus == 3 {
@@ -287,6 +283,8 @@ func (rf *Raft) readPersist(data []byte) {
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 }
 
@@ -366,7 +364,6 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 	defer rf.mu.Unlock()
 
 	reply.Term = rf.currentTerm
-	reply.ConflictTerm = -1
 	//开始处理AppendEntries
 	//接收的term小于当前的term,reject
 	if args.Term < rf.currentTerm {
@@ -387,7 +384,7 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 	if len(rf.log)-1 < args.PrevLogIndex {
 		reply.Success = false
 		reply.ConflictIndex = len(rf.log)
-		DPrintf("%v Commit: %v Server %d reject append entries from %d : log not enough\n", rf.log, rf.commitIndex, rf.me, args.LeaderId)
+		// DPrintf("%v Commit: %v Server %d reject append entries from %d : log not enough\n", rf.log, rf.commitIndex, rf.me, args.LeaderId)
 		return
 	}
 
@@ -396,14 +393,10 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 		//找出conflictIndex
 		//如果Follower在RPC参数中的prevLogIndex处的日志的term与prevLogTerm产生冲突，则将冲突处的term值和该term的第一条日志的index返回给Leader节点；若Leader节点包含该term的日志，则从该term在Leader日志中的最后一条日志处开始同步，否则从返回的index处开始同步。
 		//这个优化特别重要，因为如果follower的log很长，leader的log很短，那么leader会从follower的log的最后一条开始同步，这样会很慢,lab2C Unrealiable网络环境下会产生很多错误日志，无法在规定时间内达成Agreement
-		// 如果是因为prevLog.Term不匹配，记follower.prevLog.Term为conflictTerm。
-		// 如果leader.log找不到Term为conflictTerm的日志，则下一次从follower.log中conflictTerm的第一个log的位置开始同步日志。
-		// 如果leader.log找到了Term为conflictTerm的日志，则下一次从leader.log中conflictTerm的最后一个log的下一个位置开始同步日志。
-
-		reply.ConflictTerm = rf.log[args.PrevLogIndex].Term
-		for i := 1; i <= args.PrevLogIndex; i++ {
-			if rf.log[i].Term == reply.ConflictTerm {
-				reply.ConflictIndex = i
+		ConflictTerm := rf.log[args.PrevLogIndex].Term
+		for i := args.PrevLogIndex; i >= 0; i-- {
+			if rf.log[i].Term != ConflictTerm {
+				reply.ConflictIndex = i + 1
 				break
 			}
 		}
@@ -425,10 +418,12 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 		//说明Leader已经commit了，follower跟进commit并应用到state machine
 
 		if args.LeaderCommit > len(rf.log)-1 {
-			DPrintf("CASE 1 Server %d commitIndex %d rf.log: %v", rf.me, rf.commitIndex, rf.log)
+			rf.commitIndex = len(rf.log) - 1
+			DPrintf("CASE 1 Server %d commitIndex %d\n", rf.me, rf.commitIndex)
 			rf.apply2StateMachine(len(rf.log) - 1)
 		} else {
-			DPrintf("CASE 2 Server %d commitIndex %d rf.log: %v", rf.me, args.LeaderCommit, rf.log)
+			rf.commitIndex = len(rf.log) - 1
+			DPrintf("CASE 2 Server %d commitIndex %d\n", rf.me, args.LeaderCommit)
 			rf.apply2StateMachine(args.LeaderCommit)
 		}
 	}
@@ -509,34 +504,14 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendArg, logEnd int) bool 
 		rf.matchIndex[server] = rf.nextIndex[server] - 1
 		rf.checkMatchIndexAndCommit(rf.matchIndex[server])
 	} else {
-		//如果不是term不匹配
-		if reply.ConflictTerm == -1 {
-			rf.nextIndex[server] = reply.ConflictIndex
-			if rf.nextIndex[server] > len(rf.log) {
-				rf.nextIndex[server] = len(rf.log)
-			}
-			if rf.nextIndex[server] < 1 {
-				rf.nextIndex[server] = 1
-			}
-
-		} else { //如果是term不匹配
-			conflictIndex := -1
-			for i := args.PrevLogIndex; i > 0; i-- {
-				if rf.log[i].Term == reply.ConflictTerm {
-					conflictIndex = i
-					break
-				}
-			}
-			if conflictIndex != -1 {
-				rf.nextIndex[server] = conflictIndex + 1
-			} else {
-				rf.nextIndex[server] = reply.ConflictIndex
-			}
-
-		}
-
 		DPrintf("Leader %v 调整 %v 的失败reply", rf.me, server)
-
+		rf.nextIndex[server] = reply.ConflictIndex
+		if rf.nextIndex[server] > len(rf.log) {
+			rf.nextIndex[server] = len(rf.log)
+		}
+		if rf.nextIndex[server] < 1 {
+			rf.nextIndex[server] = 1
+		}
 	}
 
 	return ok
@@ -564,6 +539,7 @@ func (rf *Raft) checkMatchIndexAndCommit(index int) {
 			cnt++
 		}
 	}
+	//规避Figure 8的问题,一个 leader 不能 commit 之前 term 的 log entry, *2使用乘法不容易出错
 	if cnt*2 > len(rf.peers) && rf.log[index].Term == rf.currentTerm {
 		DPrintf("%v 将log replication到了majority,Index %v 应用到state machine", rf.me, rf.commitIndex)
 		rf.apply2StateMachine(index)
@@ -661,7 +637,6 @@ func (rf *Raft) ticker() {
 		// Your code here (2A)
 		// Check if a leader election should be started.
 
-		// electionTimeout := time.Duration(200+rand.Int63()%300) * time.Millisecond
 		electionTimeout := time.Duration(800+rand.Int63()%400) * time.Millisecond
 		time.Sleep(electionTimeout)
 		rf.tickerChan <- electionTimeout
@@ -764,7 +739,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.votedFor = -1
 	rf.applyCh = applyCh
-	rf.lastApplied = 0
+	rf.lastApplied = -1
 	rf.commitIndex = 0
 
 	// Your initialization code here (2A, 2B, 2C).
