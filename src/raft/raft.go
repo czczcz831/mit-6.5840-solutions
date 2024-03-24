@@ -63,6 +63,7 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
+	hbTicker  *time.Ticker
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -146,11 +147,12 @@ func (rf *Raft) LeaderHeartBeatProducer() {
 			rf.mu.Unlock()
 			break
 		}
-		DPrintf("Leader %v log %v Commit: %v Term: %v", rf.me, rf.log, rf.commitIndex, rf.currentTerm)
-		// DPrintf("Leader %v   Commit: %v", rf.me, rf.commitIndex)
-		rf.mu.Unlock()
+		// DPrintf("Leader %v log %v Commit: %v Term: %v", rf.me, rf.log, rf.commitIndex, rf.currentTerm)
+		DPrintf("Leader %v   Commit: %v", rf.me, rf.commitIndex)
 		rf.LeaderSendLog()
-		time.Sleep(50 * time.Millisecond)
+		rf.mu.Unlock()
+		<-rf.hbTicker.C
+		rf.hbTicker.Reset(50 * time.Millisecond)
 	}
 }
 
@@ -521,23 +523,23 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 	}
 	//开始log replication
 	if len(args.Entries) > 0 {
-		DPrintf("My len: %v  Server %d trying apply append entries %v from %d BeforeLog:%v FollowerCommit:%v PrevLogIndex: %v ", len(rf.log)-1+rf.lastIncludedIndex, rf.me, args.Entries, args.LeaderId, rf.log, rf.commitIndex, args.PrevLogIndex)
+		// DPrintf("My len: %v  Server %d trying apply append entries %v from %d BeforeLog:%v FollowerCommit:%v PrevLogIndex: %v ", len(rf.log)-1+rf.lastIncludedIndex, rf.me, args.Entries, args.LeaderId, rf.log, rf.commitIndex, args.PrevLogIndex)
 		rf.log = rf.log[:args.PrevLogIndex-rf.lastIncludedIndex+1]
 		rf.log = append(rf.log, args.Entries...)
 		// DPrintf("Server %d append entries %v from %d\n", rf.me, args.Entries, args.LeaderId)
-		DPrintf("Success Args %v Server %d append entries from %d succeed now log : %v", args, rf.me, args.LeaderId, rf.log)
+		// DPrintf("Success Args %v Server %d append entries from %d succeed now log : %v", args, rf.me, args.LeaderId, rf.log)
 	} else {
-		DPrintf("%v 收到心跳", rf.me)
+		// DPrintf("%v 收到心跳", rf.me)
 	}
 
 	if args.LeaderCommit > rf.commitIndex {
 		//说明Leader已经commit了，follower跟进commit并应用到state machine
 
 		if args.LeaderCommit > len(rf.log)-1+rf.lastIncludedIndex {
-			DPrintf("CASE 1 Server %d commitIndex %d rf.log: %v", rf.me, rf.commitIndex, rf.log)
+			// DPrintf("CASE 1 Server %d commitIndex %d rf.log: %v", rf.me, rf.commitIndex, rf.log)
 			rf.apply2StateMachine(len(rf.log) - 1 + rf.lastIncludedIndex)
 		} else {
-			DPrintf("CASE 2 Server %d commitIndex %d rf.log: %v", rf.me, args.LeaderCommit, rf.log)
+			// DPrintf("CASE 2 Server %d commitIndex %d rf.log: %v", rf.me, args.LeaderCommit, rf.log)
 			rf.apply2StateMachine(args.LeaderCommit)
 		}
 	}
@@ -685,7 +687,7 @@ func (rf *Raft) checkMatchIndexAndCommit(index int) {
 		}
 	}
 	if cnt*2 > len(rf.peers) && rf.log[index-rf.lastIncludedIndex].Term == rf.currentTerm {
-		DPrintf("%v 将log replication到了majority,Index %v 应用到state machine", rf.me, rf.commitIndex)
+		// DPrintf("%v 将log replication到了majority,Index %v 应用到state machine", rf.me, rf.commitIndex)
 		rf.apply2StateMachine(index)
 		return
 	}
@@ -724,8 +726,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.log = append(rf.log, lg)
 	index = len(rf.log) - 1 + rf.lastIncludedIndex
 	rf.persist(rf.persister.ReadSnapshot())
-
-	// rf.LeaderSendLog(lg)
+	rf.hbTicker.Reset(1 * time.Millisecond)
 	//给所有follower发送AppendEntries
 
 	// Your code here (2B).
@@ -734,13 +735,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 }
 
 func (rf *Raft) LeaderSendLog() {
-	rf.mu.Lock()
 	for i := range rf.peers {
 		if i == rf.me {
 			continue
 		}
 		//根据nextIndex动态构造
-		DPrintf("NextIndex: %v lastIncludedIndex:%v", rf.nextIndex, rf.lastIncludedIndex)
+		// DPrintf("NextIndex: %v lastIncludedIndex:%v", rf.nextIndex, rf.lastIncludedIndex)
 
 		if rf.nextIndex[i] <= rf.lastIncludedIndex {
 			//发送snapshot
@@ -767,7 +767,6 @@ func (rf *Raft) LeaderSendLog() {
 
 		go rf.sendAppendEntries(i, &appArg, len(rf.log)-1+rf.lastIncludedIndex)
 	}
-	rf.mu.Unlock()
 
 }
 
@@ -862,6 +861,7 @@ func (rf *Raft) startElection(ctx context.Context) {
 					}
 					rf.currentStatus = 3
 					rf.mu.Unlock()
+					rf.hbTicker = time.NewTicker(50 * time.Millisecond)
 					go rf.LeaderHeartBeatProducer()
 					return
 				}
@@ -908,8 +908,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = append(rf.log, LogEntry{Term: 0, Cmd: nil})
 	rf.matchIndex = make([]int, len(peers))
 	rf.nextIndex = make([]int, len(peers))
-	rf.applyChBuffer = make(chan ApplyMsg, 1000)
-
+	rf.applyChBuffer = make(chan ApplyMsg, 10000)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 

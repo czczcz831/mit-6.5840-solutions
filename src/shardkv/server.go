@@ -1,14 +1,17 @@
 package shardkv
 
+import (
+	"sync"
+	"time"
 
-import "6.5840/labrpc"
-import "6.5840/raft"
-import "sync"
-import "6.5840/labgob"
-
-
+	"6.5840/labgob"
+	"6.5840/labrpc"
+	"6.5840/raft"
+)
 
 type Op struct {
+	Type int
+	Cmd  interface{}
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
@@ -23,17 +26,69 @@ type ShardKV struct {
 	gid          int
 	ctrlers      []*labrpc.ClientEnd
 	maxraftstate int // snapshot if log grows this big
+	mapShard     map[string]string
 
 	// Your definitions here.
 }
 
-
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	raft.DPrintf("%v receive Get %v\n", kv.me, args)
+	reply.Err = OK
+	cmd := Op{Type: GetType, Cmd: args}
+	_, _, ok := kv.rf.Start(cmd)
+	if !ok {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	timer := time.NewTimer(1000 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		reply.Err = ErrAgreement
+	case msg := <-kv.applyCh:
+		if msg.Command == cmd {
+			kv.mu.Lock()
+			reply.Value = kv.mapShard[args.Key]
+			kv.mu.Unlock()
+		}
+	}
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	raft.DPrintf("%v receive PutAppend %v\n", kv.me, args)
+	reply.Err = OK
+	cmd := Op{}
+	cmd.Cmd = args
+	if args.Op == "Put" {
+		cmd.Type = PutType
+	} else {
+		cmd.Type = AppendType
+	}
+	_, _, ok := kv.rf.Start(cmd)
+	if !ok {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	timer := time.NewTimer(1000 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		reply.Err = ErrAgreement
+	case msg := <-kv.applyCh:
+		if msg.Command == cmd {
+			kv.mu.Lock()
+			if cmd.Type == PutType {
+				kv.mapShard[args.Key] = args.Value
+			} else {
+				kv.mapShard[args.Key] += args.Value
+			}
+			kv.mu.Unlock()
+		}
+	}
 }
 
 // the tester calls Kill() when a ShardKV instance won't
@@ -44,7 +99,6 @@ func (kv *ShardKV) Kill() {
 	kv.rf.Kill()
 	// Your code here, if desired.
 }
-
 
 // servers[] contains the ports of the servers in this group.
 //
@@ -91,7 +145,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
 
 	return kv
 }

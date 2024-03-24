@@ -503,7 +503,9 @@ func TestOnePartition3A(t *testing.T) {
 
 	cfg.begin("Test: no progress in minority (3A)")
 	go func() {
+		DPrintf("TEST: CK:%v Put 1 15", ckp2a.UUID)
 		Put(cfg, ckp2a, "1", "15", nil, -1)
+		DPrintf("TEST: CK:%v Put Complete", ckp2a.UUID)
 		done0 <- true
 	}()
 	go func() {
