@@ -60,7 +60,7 @@ type ApplyMsg struct {
 type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
+	Persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 	hbTicker  *time.Ticker
@@ -122,14 +122,14 @@ func (rf *Raft) apply2StateMachine(CommitIdx int) {
 			Command:      rf.log[i-rf.lastIncludedIndex].Cmd,
 			CommandIndex: i,
 		}
-		DPrintf("Server %d apply to state machine %v matchIdx: %v", rf.me, rf.log[i-rf.lastIncludedIndex].Cmd, rf.matchIndex)
+		DPrintf("Server %d apply Index:%v to state machine %v matchIdx: %v", rf.me, i, rf.log[i-rf.lastIncludedIndex].Cmd, rf.matchIndex)
 		//applyCH会阻塞，而且最好保证只有一个goroutine提交
 		// rf.mu.Unlock()
 		rf.applyChBuffer <- alyMsg
 		// rf.mu.Lock()
 	}
 	rf.lastApplied = rf.commitIndex
-	rf.persist(rf.persister.ReadSnapshot())
+	rf.persist(rf.Persister.ReadSnapshot())
 }
 
 func (rf *Raft) applier() {
@@ -219,7 +219,7 @@ func (rf *Raft) RefreshTerm(term int) {
 		rf.currentTerm = term
 	}
 	rf.currentStatus = 1
-	rf.persist(rf.persister.ReadSnapshot())
+	rf.persist(rf.Persister.ReadSnapshot())
 }
 
 // return currentTerm and whether this server
@@ -251,7 +251,7 @@ func (rf *Raft) persist(snapShot []byte) {
 	e.Encode(rf.lastIncludedIndex)
 	e.Encode(rf.lastIncludedTerm)
 	raftState := w.Bytes()
-	rf.persister.Save(raftState, snapShot)
+	rf.Persister.Save(raftState, snapShot)
 	// Example:
 	// w := new(bytes.Buffer)
 	// e := labgob.NewEncoder(w)
@@ -312,7 +312,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if index < rf.lastIncludedIndex {
+	if index <= rf.lastIncludedIndex || index-rf.lastIncludedIndex >= len(rf.log) {
 		return
 	}
 	rf.lastIncludedTerm = rf.log[index-rf.lastIncludedIndex].Term
@@ -347,13 +347,14 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		SnapshotIndex: rf.lastIncludedIndex,
 	}
 	rf.applyCh <- applyMsg
+	//下面这段傻逼代码害我在lab3 de了几个小时的BUG,不用这段代码也行后面的日志全部删除
 	// If existing log entry has same index and term as snapshot’s last included entry, retain log entries following it and reply
-	if args.LastIncludedIndex < len(rf.log)-1+rf.lastIncludedIndex && rf.log[args.LastIncludedIndex-rf.lastIncludedIndex].Term == args.LastIncludedTerm {
-		rf.log = rf.log[args.LastIncludedIndex-rf.lastIncludedIndex:]
-		DPrintf("%v 保留了lastIncludedIndex之后的log %v ", rf.me, rf.log)
-		rf.persist(args.SnapShot)
-		return
-	}
+	// if args.LastIncludedIndex < len(rf.log)-1+rf.lastIncludedIndex && rf.log[args.LastIncludedIndex-rf.lastIncludedIndex].Term == args.LastIncludedTerm {
+	// 	rf.log = rf.log[args.LastIncludedIndex-rf.lastIncludedIndex:]
+	// 	DPrintf("%v 保留了lastIncludedIndex之后的log %v ", rf.me, rf.log)
+	// 	rf.persist(args.SnapShot)
+	// 	return
+	// }
 	DPrintf("%v 应用snapshot并丢弃了所有log ", rf.me)
 	rf.log = make([]LogEntry, 1)
 	rf.log[0] = LogEntry{Term: rf.lastIncludedTerm, Cmd: nil}
@@ -441,7 +442,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.Reason = "Term " + strconv.Itoa(args.Term) + " < " + strconv.Itoa(rf.currentTerm)
 		}
 		reply.VoteGranted = false
-		rf.persist(rf.persister.ReadSnapshot())
+		rf.persist(rf.Persister.ReadSnapshot())
 		return
 	}
 	//TODO: persist currentTerm and votedFor
@@ -449,21 +450,21 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.LastLogTerm < rf.log[len(rf.log)-1].Term {
 		reply.Reason = "Term Not up-to-date "
 		reply.VoteGranted = false
-		rf.persist(rf.persister.ReadSnapshot())
+		rf.persist(rf.Persister.ReadSnapshot())
 		return
 	}
 	//如果term相同但log不够长
 	if args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex < len(rf.log)-1+rf.lastIncludedIndex {
 		reply.Reason = "Term same but qLog Index Not up-to-date"
 		reply.VoteGranted = false
-		rf.persist(rf.persister.ReadSnapshot())
+		rf.persist(rf.Persister.ReadSnapshot())
 		return
 	}
 	// DPrintf("Server %v vote yes with log %v", rf.me, rf.log)
 	rf.votedFor = args.CandidateId
 	//Reset to follower
 	rf.currentStatus = 1
-	rf.persist(rf.persister.ReadSnapshot())
+	rf.persist(rf.Persister.ReadSnapshot())
 }
 
 func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
@@ -488,6 +489,12 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 		return
 	}
 
+	if args.PrevLogIndex < rf.lastIncludedIndex { //说明已经Snapshot提交了
+		reply.Success = true
+		DPrintf("Server %d reject append entries from %d : log not enough\n", rf.me, args.LeaderId)
+		return
+	}
+
 	//prevLogIndex和prevLogTerm不匹配,reject
 	if len(rf.log)-1+rf.lastIncludedIndex < args.PrevLogIndex {
 		reply.Success = false
@@ -496,6 +503,7 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 		return
 	}
 
+	DPrintf("%v MAY CRASH!!! 接收到来自leader %v 的PrevLogIndex:%v", rf.me, args.LeaderId, args.PrevLogIndex)
 	if rf.log[args.PrevLogIndex-rf.lastIncludedIndex].Term != args.PrevLogTerm {
 		reply.Success = false
 		//找出conflictIndex
@@ -504,7 +512,6 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 		// 如果是因为prevLog.Term不匹配，记follower.prevLog.Term为conflictTerm。
 		// 如果leader.log找不到Term为conflictTerm的日志，则下一次从follower.log中conflictTerm的第一个log的位置开始同步日志。
 		// 如果leader.log找到了Term为conflictTerm的日志，则下一次从leader.log中conflictTerm的最后一个log的下一个位置开始同步日志。
-
 		reply.ConflictTerm = rf.log[args.PrevLogIndex-rf.lastIncludedIndex].Term
 		// for i := 1; i <= args.PrevLogIndex; i++ {
 		// 	if rf.log[i-rf.lastIncludedIndex].Term == reply.ConflictTerm {
@@ -543,7 +550,7 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 			rf.apply2StateMachine(args.LeaderCommit)
 		}
 	}
-	rf.persist(rf.persister.ReadSnapshot())
+	rf.persist(rf.Persister.ReadSnapshot())
 	reply.Success = true
 }
 
@@ -725,8 +732,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	rf.log = append(rf.log, lg)
 	index = len(rf.log) - 1 + rf.lastIncludedIndex
-	rf.persist(rf.persister.ReadSnapshot())
-	rf.hbTicker.Reset(1 * time.Millisecond)
+	rf.persist(rf.Persister.ReadSnapshot())
+	if rf.hbTicker != nil {
+		rf.hbTicker.Reset(10 * time.Millisecond)
+	}
 	//给所有follower发送AppendEntries
 
 	// Your code here (2B).
@@ -749,7 +758,7 @@ func (rf *Raft) LeaderSendLog() {
 				LeaderId:          rf.me,
 				LastIncludedIndex: rf.lastIncludedIndex,
 				LastIncludedTerm:  rf.lastIncludedTerm,
-				SnapShot:          rf.persister.ReadSnapshot(),
+				SnapShot:          rf.Persister.ReadSnapshot(),
 			}
 			go rf.SendInstallSnapshot(i, installArgs)
 			DPrintf("Leader %v 没有缺失的日志，发送snapshot给%v", rf.me, i)
@@ -894,7 +903,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
-	rf.persister = persister
+	rf.Persister = persister
 	rf.currentStatus = 1
 	rf.me = me
 	rf.votedFor = -1

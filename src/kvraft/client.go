@@ -32,6 +32,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck.servers = servers
 	// You'll have to add code here.
 	ck.UUID = uuid.New().String()
+	ck.Seq = 1
 	return ck
 }
 
@@ -49,7 +50,7 @@ func (ck *Clerk) Get(key string) string {
 	// You will have to modify this function.
 	ck.mu.Lock()
 	ok := false
-	var reply GetReply
+	var reply *GetReply
 	i := ck.LastLeader
 	args := GetArgs{
 		Key:      key,
@@ -57,9 +58,9 @@ func (ck *Clerk) Get(key string) string {
 		Seq:      ck.Seq,
 	}
 	for !ok || reply.Err != OK {
+		reply = &GetReply{}
 		reply.Err = ""
-
-		ck.mu.Unlock()
+		// ck.mu.Unlock()
 		flag := make(chan bool)
 		go func() {
 			ok = ck.servers[i].Call("KVServer.Get", &args, &reply)
@@ -71,10 +72,7 @@ func (ck *Clerk) Get(key string) string {
 		}
 		// DPrintf("Client %v 发送给 %v Get key:%v", ck.UUID, i, key)
 		i = nrand() % int64(len(ck.servers))
-		ck.mu.Lock()
-		if reply.Err == ErrStaleReq {
-			break
-		}
+		// ck.mu.Lock()
 	}
 	ck.Seq++
 	ck.LastLeader = reply.Leader
@@ -95,7 +93,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
 	ck.mu.Lock()
 	ok := false
-	var reply PutAppendReply
+	var reply *PutAppendReply
 	i := ck.LastLeader
 	args := PutAppendArgs{
 		Key:      key,
@@ -105,8 +103,9 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		Seq:      ck.Seq,
 	}
 	for !ok || reply.Err != OK {
+		reply = &PutAppendReply{}
 		reply.Err = ""
-		ck.mu.Unlock()
+		// ck.mu.Unlock()
 		flag := make(chan bool)
 		go func() {
 			ok = ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
@@ -120,10 +119,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		// DPrintf("Client %v 发送给 %v PutAppend key:%v value:%v", ck.UUID, i, key, value)
 		// DPrintf("Client %v 收到来自 %v 的reply %v", ck.UUID, i, reply)
 		i = nrand() % int64(len(ck.servers))
-		ck.mu.Lock()
-		if reply.Err == ErrStaleReq {
-			args.Seq = ck.Seq
-		}
+		// ck.mu.Lock()
 	}
 
 	ck.Seq++
