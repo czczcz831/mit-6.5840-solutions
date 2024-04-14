@@ -503,7 +503,6 @@ func (rf *Raft) AppendEntries(args *AppendArg, reply *AppendRpl) {
 		return
 	}
 
-	DPrintf("%v MAY CRASH!!! 接收到来自leader %v 的PrevLogIndex:%v", rf.me, args.LeaderId, args.PrevLogIndex)
 	if rf.log[args.PrevLogIndex-rf.lastIncludedIndex].Term != args.PrevLogTerm {
 		reply.Success = false
 		//找出conflictIndex

@@ -48,12 +48,6 @@ type KVServer struct {
 	// Your definitions here.
 }
 
-type TableRes struct {
-	Type         int
-	GetRpl       GetReply
-	PutAppendRpl PutAppendReply
-}
-
 func (kv *KVServer) ExectuteOp() {
 	for {
 		msg := <-kv.applyCh

@@ -61,6 +61,7 @@ func check_same_config(t *testing.T, c1 Config, c2 Config) {
 		t.Fatalf("Shards wrong")
 	}
 	if len(c1.Groups) != len(c2.Groups) {
+		DPrintf("%v %v", c1.Groups, c2.Groups)
 		t.Fatalf("number of Groups is wrong")
 	}
 	for gid, sa := range c1.Groups {
@@ -96,11 +97,13 @@ func TestBasic(t *testing.T) {
 	ck.Join(map[int][]string{gid1: []string{"x", "y", "z"}})
 	check(t, []int{gid1}, ck)
 	cfa[1] = ck.Query(-1)
+	DPrintf("cfa[1]: %v", cfa[1])
 
 	var gid2 int = 2
 	ck.Join(map[int][]string{gid2: []string{"a", "b", "c"}})
 	check(t, []int{gid1, gid2}, ck)
 	cfa[2] = ck.Query(-1)
+	DPrintf("cfa[2]: %v", cfa[2])
 
 	cfx := ck.Query(-1)
 	sa1 := cfx.Groups[gid1]
@@ -111,13 +114,14 @@ func TestBasic(t *testing.T) {
 	if len(sa2) != 3 || sa2[0] != "a" || sa2[1] != "b" || sa2[2] != "c" {
 		t.Fatalf("wrong servers for gid %v: %v\n", gid2, sa2)
 	}
-
 	ck.Leave([]int{gid1})
 	check(t, []int{gid2}, ck)
 	cfa[4] = ck.Query(-1)
+	DPrintf("cfa[4]: %v", cfa[4])
 
 	ck.Leave([]int{gid2})
 	cfa[5] = ck.Query(-1)
+	DPrintf("cfa[5]: %v", cfa[5])
 
 	fmt.Printf("  ... Passed\n")
 
@@ -127,6 +131,7 @@ func TestBasic(t *testing.T) {
 		cfg.ShutdownServer(s)
 		for i := 0; i < len(cfa); i++ {
 			c := ck.Query(cfa[i].Num)
+			DPrintf("cfa[%v]: %v", i, c)
 			check_same_config(t, c, cfa[i])
 		}
 		cfg.StartServer(s)
