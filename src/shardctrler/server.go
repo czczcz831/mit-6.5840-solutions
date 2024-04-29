@@ -12,7 +12,7 @@ import (
 	"6.5840/raft"
 )
 
-const Debug = true
+const Debug = false
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug {
@@ -43,15 +43,19 @@ func (sc *ShardCtrler) ExectuteOp() {
 	for {
 		msg := <-sc.applyCh
 		//如果是旧的日志，直接跳过
+		sc.mu.Lock()
 		if sc.LastApplyIndex > msg.CommandIndex && msg.CommandValid {
+			sc.mu.Unlock()
 			continue
 		}
 		//只能安装比上次快照大的index
 		if sc.LastSnapshotIndex > msg.SnapshotIndex && msg.SnapshotValid {
+			sc.mu.Unlock()
 			continue
 		}
+		sc.mu.Unlock()
 		if msg.CommandValid {
-			DPrintf("Server %d receive msg %v", sc.me, msg)
+			// DPrintf("Server %d receive msg %v", sc.me, msg)
 			op := msg.Command.(Op)
 			sc.mu.Lock()
 			//泛型判断操作类型
@@ -82,7 +86,6 @@ func (sc *ShardCtrler) ExectuteOp() {
 					}
 				}
 				sc.LastSeq[args.ClientID] = args.Seq
-				DPrintf("Server %v Query %v", sc.me, args.Num)
 			} else if op.Type == JoinType {
 				args := op.Cmd.(JoinArgs)
 				//如果操作已经被执行过
@@ -172,7 +175,7 @@ func (sc *ShardCtrler) BalanceNShards(conf *Config) {
 		return
 	}
 	//每次都按照同一种顺序分配GID
-	DPrintf("负载均衡前: %v", conf.Shards)
+	// DPrintf("%v 负载均衡前: %v", sc.me, conf.Shards)
 	gids := make([]int, 0, len(conf.Groups))
 	for gid := range conf.Groups {
 		gids = append(gids, gid)
@@ -181,6 +184,7 @@ func (sc *ShardCtrler) BalanceNShards(conf *Config) {
 	gidNum := len(gids)
 	avgShard := NShards / gidNum
 	offset := 0
+	//简单的负载均衡
 	//按从小到大的顺序给gid分配avgShard数量的shard
 	for i, gid := range gids {
 		for j := 0; j < avgShard; j++ {
@@ -201,7 +205,7 @@ func (sc *ShardCtrler) BalanceNShards(conf *Config) {
 		}
 	}
 
-	DPrintf("负载均衡后: %v", conf.Shards)
+	// DPrintf("%v 负载均衡后: %v", sc.me, conf.Shards)
 
 }
 

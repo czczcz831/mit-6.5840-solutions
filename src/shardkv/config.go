@@ -316,6 +316,7 @@ func (cfg *config) joinm(gis []int) {
 			servernames[i] = cfg.servername(gid, i)
 		}
 		m[gid] = servernames
+		DPrintf("Test : %v GID 加入", gid)
 	}
 	cfg.mck.Join(m)
 }
@@ -329,6 +330,7 @@ func (cfg *config) leavem(gis []int) {
 	gids := make([]int, 0, len(gis))
 	for _, g := range gis {
 		gids = append(gids, cfg.groups[g].gid)
+		DPrintf("Test : %v GID 离开", cfg.groups[g].gid)
 	}
 	cfg.mck.Leave(gids)
 }

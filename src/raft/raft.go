@@ -741,6 +741,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 
 	return index, term, isLeader
 }
+func (rf *Raft) CheckCurrentTermLog() bool {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	latestLog := rf.log[len(rf.log)-1]
+	if rf.currentTerm == latestLog.Term {
+		return true
+	}
+
+	return false
+}
 
 func (rf *Raft) LeaderSendLog() {
 	for i := range rf.peers {

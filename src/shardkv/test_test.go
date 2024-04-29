@@ -119,6 +119,7 @@ func TestJoinLeave(t *testing.T) {
 		check(t, ck, ka[i], va[i])
 	}
 
+	DPrintf("TEST 1 加入")
 	cfg.join(1)
 
 	for i := 0; i < n; i++ {
@@ -127,7 +128,7 @@ func TestJoinLeave(t *testing.T) {
 		ck.Append(ka[i], x)
 		va[i] += x
 	}
-
+	DPrintf("TEST 0 离开")
 	cfg.leave(0)
 
 	for i := 0; i < n; i++ {
@@ -142,8 +143,10 @@ func TestJoinLeave(t *testing.T) {
 
 	cfg.checklogs()
 	cfg.ShutdownGroup(0)
+	DPrintf("TEST 0 关闭")
 
 	for i := 0; i < n; i++ {
+		DPrintf("TEST Check %v", i)
 		check(t, ck, ka[i], va[i])
 	}
 
@@ -171,6 +174,7 @@ func TestSnapshot(t *testing.T) {
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
+	DPrintf("1 2 0 测试")
 
 	cfg.join(1)
 	cfg.join(2)
@@ -185,6 +189,7 @@ func TestSnapshot(t *testing.T) {
 
 	cfg.leave(1)
 	cfg.join(0)
+	DPrintf("1 0 测试`")
 
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
@@ -206,6 +211,7 @@ func TestSnapshot(t *testing.T) {
 	cfg.ShutdownGroup(0)
 	cfg.ShutdownGroup(1)
 	cfg.ShutdownGroup(2)
+	DPrintf("012 重启")
 
 	cfg.StartGroup(0)
 	cfg.StartGroup(1)
@@ -341,12 +347,14 @@ func TestConcurrent1(t *testing.T) {
 		go ff(i)
 	}
 
+	DPrintf("102测试开始")
 	time.Sleep(150 * time.Millisecond)
 	cfg.join(1)
 	time.Sleep(500 * time.Millisecond)
 	cfg.join(2)
 	time.Sleep(500 * time.Millisecond)
 	cfg.leave(0)
+	DPrintf("120测试结束")
 
 	cfg.ShutdownGroup(0)
 	time.Sleep(100 * time.Millisecond)
@@ -355,6 +363,7 @@ func TestConcurrent1(t *testing.T) {
 	cfg.ShutdownGroup(2)
 
 	cfg.leave(2)
+	DPrintf("0122结束")
 
 	time.Sleep(100 * time.Millisecond)
 	cfg.StartGroup(0)
