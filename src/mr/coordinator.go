@@ -60,7 +60,7 @@ func (c *Coordinator) ReduceTimeCount(ReduceID int) {
 func (c *Coordinator) MapFinished(args *MapFinishedArgs, reply *MapFinishedReply) error {
 	c.Lock.Lock()
 	defer c.Lock.Unlock()
-	//如果任务已经超时，不再接受
+	//如果任务已经超时，重新分配任务，不再接受
 	if !c.Tasks[args.MapID].MapTook {
 		return nil
 	}
@@ -85,7 +85,7 @@ func (c *Coordinator) ReduceFinshed(args *ReduceFinishedArgs, reply *ReduceFinis
 func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 	c.Lock.Lock()
 	defer c.Lock.Unlock()
-	for k, v := range c.Tasks {
+	for k, v := range c.Tasks { //获取任务
 		if !v.MapTook {
 			reply.TaskRpl = *v
 			reply.ReduceNum = c.ReduceNum
@@ -94,8 +94,8 @@ func (c *Coordinator) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			break
 		}
 	}
-	if c.MapHasDone == len(c.Tasks) {
-		for i := 0; i < c.ReduceNum; i++ {
+	if c.MapHasDone == len(c.Tasks) { //Map函数已经完成
+		for i := 0; i < c.ReduceNum; i++ { //开始Reduce函数
 			if !c.ReduceTook[i] {
 				reply.TaskRpl = Task{
 					FileName: "",

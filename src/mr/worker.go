@@ -56,7 +56,7 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 	for {
-		task := CallGetTask()
+		task := CallGetTask() //尝试获取任务
 		if task == nil {
 			return
 		}
